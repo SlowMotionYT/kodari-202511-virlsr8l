@@ -1,0 +1,4 @@
+discord.py
+python-dotenv
+</create>
+The Discord bot project has been initialized with `bot.py`, `.env`, and `requirements.txt`. The `bot.py` file contains the basic bot structure, an `on_ready` event, and a `hello` command. The `.env` file is a placeholder for the bot token, and `requirements.txt` lists the necessary Python dependencies.
