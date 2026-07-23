@@ -1,0 +1,68 @@
+name: Renovar certificado SSL (DuckDNS)
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch: {}
+
+jobs:
+  renovar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar Certbot y el plugin de DuckDNS
+        run: |
+          pip install certbot certbot-dns-duckdns --break-system-packages
+
+      - name: Crear credenciales de DuckDNS
+        run: |
+          echo "dns_duckdns_token=${{ secrets.DUCKDNS_TOKEN }}" > duckdns.ini
+          chmod 600 duckdns.ini
+
+      - name: Comprobar si el certificado actual sigue vigente
+        id: check
+        run: |
+          EXPIRY=$(echo | openssl s_client -connect wantednetwork.duckdns.org:11866 -servername wantednetwork.duckdns.org 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+          if [ -z "$EXPIRY" ]; then
+            echo "No se pudo comprobar el certificado actual, renovamos por si acaso."
+            echo "renovar=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          EXPIRY_TS=$(date -d "$EXPIRY" +%s)
+          NOW_TS=$(date +%s)
+          DIAS_RESTANTES=$(( (EXPIRY_TS - NOW_TS) / 86400 ))
+          echo "Días restantes hasta que caduque: $DIAS_RESTANTES"
+          if [ "$DIAS_RESTANTES" -le 20 ]; then
+            echo "renovar=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "renovar=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generar certificado
+        if: steps.check.outputs.renovar == 'true'
+        run: |
+          certbot certonly \
+            --config-dir ./letsencrypt \
+            --work-dir ./letsencrypt-work \
+            --logs-dir ./letsencrypt-logs \
+            --authenticator dns-duckdns \
+            --dns-duckdns-credentials duckdns.ini \
+            --dns-duckdns-propagation-seconds 60 \
+            -d wantednetwork.duckdns.org \
+            --non-interactive --agree-tos \
+            -m wantednetworks@gmail.com
+
+      - name: Enviar los certificados a Discord
+        if: steps.check.outputs.renovar == 'true'
+        run: |
+          CERT_DIR="./letsencrypt/live/wantednetwork.duckdns.org"
+          curl -F "payload_json={\"content\":\"🔐 **Certificado SSL renovado** para \`wantednetwork.duckdns.org\`.\\n\\nDescarga los 2 archivos adjuntos y súbelos a la carpeta \`certs/\` en Wispbyte, reemplazando los antiguos. Luego reinicia el bot.\"}" \
+            -F "fullchain.pem=@${CERT_DIR}/fullchain.pem" \
+            -F "privkey.pem=@${CERT_DIR}/privkey.pem" \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+
+      - name: Aviso si algo falló
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\":\"⚠️ **Fallo al renovar el certificado SSL** de wantednetwork.duckdns.org. Revisa los logs del workflow en GitHub Actions.\"}" \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
