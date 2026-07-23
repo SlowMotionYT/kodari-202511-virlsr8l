@@ -75,12 +75,3 @@ jobs:
           curl -H "Content-Type: application/json" \
             -d '{"content":"✅ Test — el webhook funciona correctamente."}' \
             "${{ secrets.DISCORD_WEBHOOK_URL }}"
-
-  test-webhook:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enviar mensaje de prueba a Discord
-        run: |
-          curl -H "Content-Type: application/json" \
-            -d '{"content":"✅ Test — el webhook funciona correctamente."}' \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}"
