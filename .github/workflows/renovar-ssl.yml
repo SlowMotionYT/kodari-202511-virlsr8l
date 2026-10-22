@@ -12,7 +12,7 @@ on:
 
 env:
   DOMINIO: wnss.duckdns.org
-  PUERTO: '26534'
+  PUERTO: '23516'
 
 jobs:
   renovar:
