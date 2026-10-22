@@ -3,7 +3,16 @@ name: Renovar certificado SSL (DuckDNS)
 on:
   schedule:
     - cron: '0 9 * * 1'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      forzar:
+        description: 'Renovar aunque el certificado actual siga vigente'
+        type: boolean
+        default: true
+
+env:
+  DOMINIO: wnss.duckdns.org
+  PUERTO: '26534'
 
 jobs:
   renovar:
@@ -21,16 +30,28 @@ jobs:
       - name: Comprobar si el certificado actual sigue vigente
         id: check
         run: |
-          EXPIRY=$(echo | openssl s_client -connect wantednetwork.duckdns.org:11866 -servername wantednetwork.duckdns.org 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
-          if [ -z "$EXPIRY" ]; then
+          if [ "${{ github.event.inputs.forzar }}" = "true" ]; then
+            echo "Renovacion forzada manualmente."
+            echo "renovar=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          CERT=$(echo | openssl s_client -connect ${DOMINIO}:${PUERTO} -servername ${DOMINIO} 2>/dev/null | openssl x509 2>/dev/null)
+          if [ -z "$CERT" ]; then
             echo "No se pudo comprobar el certificado actual, renovamos por si acaso."
             echo "renovar=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Si el certificado servido no es de este dominio, hay que renovar siempre
+          if ! echo "$CERT" | openssl x509 -noout -ext subjectAltName 2>/dev/null | grep -q "DNS:${DOMINIO}"; then
+            echo "El certificado servido no es de ${DOMINIO}, renovamos."
+            echo "renovar=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          EXPIRY=$(echo "$CERT" | openssl x509 -noout -enddate | cut -d= -f2)
           EXPIRY_TS=$(date -d "$EXPIRY" +%s)
           NOW_TS=$(date +%s)
           DIAS_RESTANTES=$(( (EXPIRY_TS - NOW_TS) / 86400 ))
-          echo "Días restantes hasta que caduque: $DIAS_RESTANTES"
+          echo "Dias restantes hasta que caduque: $DIAS_RESTANTES"
           if [ "$DIAS_RESTANTES" -le 20 ]; then
             echo "renovar=true" >> "$GITHUB_OUTPUT"
           else
@@ -47,31 +68,22 @@ jobs:
             --authenticator dns-duckdns \
             --dns-duckdns-credentials duckdns.ini \
             --dns-duckdns-propagation-seconds 60 \
-            -d wantednetwork.duckdns.org \
+            -d ${DOMINIO} \
             --non-interactive --agree-tos \
             -m wantednetworks@gmail.com
 
       - name: Enviar los certificados a Discord
         if: steps.check.outputs.renovar == 'true'
         run: |
-          CERT_DIR="./letsencrypt/live/wantednetwork.duckdns.org"
-          curl -F "payload_json={\"content\":\"🔐 **Certificado SSL renovado** para \`wantednetwork.duckdns.org\`.\\n\\nDescarga los 2 archivos adjuntos y súbelos a la carpeta \`certs/\` en Wispbyte, reemplazando los antiguos. Luego reinicia el bot.\"}" \
+          CERT_DIR="./letsencrypt/live/${DOMINIO}"
+          curl -F "payload_json={\"content\":\"🔐 **Certificado SSL renovado** para \`${DOMINIO}\`.\\n\\nDescarga los 2 archivos adjuntos y subelos a la carpeta \`certs/\` en Wispbyte, reemplazando los antiguos. No hace falta reiniciar el bot: los recarga solo en menos de un minuto.\"}" \
             -F "fullchain.pem=@${CERT_DIR}/fullchain.pem" \
             -F "privkey.pem=@${CERT_DIR}/privkey.pem" \
             "${{ secrets.DISCORD_WEBHOOK_URL }}"
 
-      - name: Aviso si algo falló
+      - name: Aviso si algo fallo
         if: failure()
         run: |
           curl -H "Content-Type: application/json" \
-            -d "{\"content\":\"⚠️ **Fallo al renovar el certificado SSL** de wantednetwork.duckdns.org. Revisa los logs del workflow en GitHub Actions.\"}" \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}"
-
-  test-webhook:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Enviar mensaje de prueba a Discord
-        run: |
-          curl -H "Content-Type: application/json" \
-            -d '{"content":"✅ Test — el webhook funciona correctamente."}' \
+            -d "{\"content\":\"⚠️ **Fallo al renovar el certificado SSL** de ${DOMINIO}. Revisa los logs del workflow en GitHub Actions.\"}" \
             "${{ secrets.DISCORD_WEBHOOK_URL }}"
